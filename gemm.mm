@@ -3,7 +3,9 @@
 #include <Foundation/Foundation.h>
 #include <Accelerate/Accelerate.h>
 #include <cstdio>
+#include <simd/vector_types.h>
 #include <vecLib/vDSP.h>
+#include <simd/simd.h>
 #include <time.h>
 
 #define N 2048
@@ -28,12 +30,24 @@ void naive_gemm(float* A, float* B, float* C)
 void gemm(float* A, float* B, float* C)
 {
   constexpr auto block = 16;
+  constexpr auto tblock = block;
+
+  // transpose in blocks
+  for (int y = 0; y < N; y += tblock) {
+    for (int x = 0; x < N; x += tblock) {
+      for (int yb = 0; yb < tblock; yb++) {
+        for (int xb = 0; xb < tblock; xb++) {
+          Bt[x * N + y + yb * N + xb] = B[y * N + x + yb * N + xb];
+        }
+      }
+    }
+  }
 
   for (int y = 0; y < N; y += block) {
     for (int x = 0; x < N; x += block) {
       for (int k = 0; k < N; k += block) {
         float* block_A = A + y * N + k;
-        float* block_B = B + k * N + x;
+        float* block_B = Bt + x * N + k;
         float block_C[block * block] = {0};
 
         for (int yb = 0; yb < block; yb++) {
@@ -43,6 +57,7 @@ void gemm(float* A, float* B, float* C)
             }
           }
         }
+
         for (int i = 0; i < block * block; i++) {
           C[y * N + x + (i / block * N) + (i % block)] += block_C[i];
         }
@@ -73,17 +88,6 @@ int main()
   }
 
   {
-    constexpr auto tblock = 8;
-    for (int y = 0; y < N; y += tblock) {
-      for (int x = 0; x < N; x += tblock) {
-        for (int yb = 0; yb < tblock; yb++) {
-          for (int xb = 0; xb < tblock; xb++) {
-            Bt[x * N + y + xb * N + yb] = B[y * N + x + yb * N + xb];
-          }
-        }
-      }
-    }
-
     clock_t st = clock();
 
     gemm(A, B, C);
@@ -92,10 +96,14 @@ int main()
     double tt = (double)(et - st) / CLOCKS_PER_SEC;
 
     printf("gemm GFLOPS %.3f\n", (double)flops * 1e-9 / tt);
-    memset(C, 0, sizeof(C));
+
+    for (uint i = 0; i < N * N; i++) {
+      assert(C[i] == vdspResult[i]);
+    }
   }
 
   {
+    memset(C, 0, sizeof(C));
     clock_t st = clock();
 
     naive_gemm(A, B, C);
@@ -104,10 +112,6 @@ int main()
     double tt = (double)(et - st) / CLOCKS_PER_SEC;
 
     printf("naive gemm GFLOPS %.3f\n", (double)flops * 1e-9 / tt);
-  }
-
-  for (uint i = 0; i < N * N; i++) {
-    assert(C[i] == vdspResult[i]);
   }
   
 
