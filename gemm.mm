@@ -10,10 +10,10 @@
 
 #define N 2048
 
-float A[N * N];
-float B[N * N];
-float C[N * N];
-float Bt[N * N];
+alignas(16) float A[N * N];
+alignas(16) float B[N * N];
+alignas(16) float C[N * N];
+alignas(16) float Bt[N * N];
 float vdspResult[N * N];
 
 void naive_gemm(float* A, float* B, float* C)
@@ -29,8 +29,9 @@ void naive_gemm(float* A, float* B, float* C)
 
 void gemm(float* A, float* B, float* C)
 {
-  constexpr auto block = 16;
-  constexpr auto tblock = block;
+  constexpr auto block_x = 2;
+  constexpr auto block_y = 4;
+  constexpr auto tblock = 1;
 
   // transpose in blocks
   for (int y = 0; y < N; y += tblock) {
@@ -43,24 +44,20 @@ void gemm(float* A, float* B, float* C)
     }
   }
 
-  for (int y = 0; y < N; y += block) {
-    for (int x = 0; x < N; x += block) {
-      for (int k = 0; k < N; k += block) {
-        float* block_A = A + y * N + k;
-        float* block_B = Bt + x * N + k;
-        float block_C[block * block] = {0};
+  for (int y = 0; y < N; y += block_y) {
+    for (int x = 0; x < N; x += block_x) {
+      float block_C[block_x * block_y] = {0};
 
-        for (int yb = 0; yb < block; yb++) {
-          for (int xb = 0; xb < block; xb++) {
-            for (int kb = 0; kb < block; kb++) {
-              block_C[yb * block + xb] += block_A[yb * N + kb] * block_B[kb * N + xb];     
-            }
+      for (int k = 0; k < N; k++) {
+        for (int yb = 0; yb < block_y; yb++) {
+          for (int xb = 0; xb < block_x; xb++) {
+            block_C[yb * block_y + xb] += A[y * N + yb * N + k] * Bt[x * N + xb * N + k];     
           }
         }
+      }
 
-        for (int i = 0; i < block * block; i++) {
-          C[y * N + x + (i / block * N) + (i % block)] += block_C[i];
-        }
+      for (int i = 0; i < block_y * block_x; i++) {
+        C[y * N + x + (i / block_y * N) + (i % block_x)] += block_C[i];
       }
     }
   }
