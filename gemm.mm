@@ -29,8 +29,8 @@ void naive_gemm(float* A, float* B, float* C)
 
 void gemm(float* A, float* B, float* C)
 {
-  constexpr auto block_x = 2;
-  constexpr auto block_y = 4;
+  constexpr auto block_x = 1;
+  constexpr auto block_y = 16;
   constexpr auto tblock = 1;
 
   // transpose in blocks
@@ -39,6 +39,7 @@ void gemm(float* A, float* B, float* C)
       for (int yb = 0; yb < tblock; yb++) {
         for (int xb = 0; xb < tblock; xb++) {
           Bt[x * N + y + yb * N + xb] = B[y * N + x + yb * N + xb];
+          // Bt[x * N + y + yb * N + xb] = B[y * N + x + yb * N + xb];
         }
       }
     }
@@ -56,8 +57,10 @@ void gemm(float* A, float* B, float* C)
         }
       }
 
-      for (int i = 0; i < block_y * block_x; i++) {
-        C[y * N + x + (i / block_y * N) + (i % block_x)] += block_C[i];
+      for (int yb = 0; yb < block_y; yb++) {
+        for (int xb = 0; xb < block_x; xb++) {
+          C[y * N + yb * N + x + xb] = block_C[yb * block_y + xb];
+        }
       }
     }
   }
