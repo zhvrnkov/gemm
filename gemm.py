@@ -32,7 +32,7 @@ import time
 # vec_length * space.height
 # how much flop in matrix matrix multiple? its m1.height * m0.height * m1.width = k * m * n
 
-N = 4096
+N = 2048
 
 flops = N * N * 2 * N
 
