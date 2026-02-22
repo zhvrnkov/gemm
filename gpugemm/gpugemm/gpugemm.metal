@@ -2,18 +2,38 @@
 using namespace metal;
 
 kernel void sgemm(
-  const device float* A,
-  const device float* B,
-  device float* C,
-  constant const uint64_t& N,
-  uint2 gid [[thread_position_in_grid]],
-  uint2 lid [[thread_position_in_threadgroup]],
-  uint2 bgid [[threadgroup_position_in_grid]]
-)
+                  const device float* A,
+                  const device float* B,
+                  device float* C,
+                  constant const uint64_t& N,
+//                  threadgroup float* As,
+//                  threadgroup float* Bs,
+                  uint2 gid [[thread_position_in_grid]],
+                  uint2 lid [[thread_position_in_threadgroup]],
+                  uint2 group_id [[threadgroup_position_in_grid]],
+                  uint2 group_size [[threads_per_threadgroup]]
+                  )
 {
-  for (uint64_t k = 0; k < N; k++) {
-    C[gid.y * N + gid.x] += A[gid.y * N + k] * B[k * N + gid.x];
-  }
+    constexpr uint64_t dK = 32;
+    threadgroup float As[dK * dK];
+    threadgroup float Bs[dK * dK];
+
+    device float* bC = &C[group_id.y * group_size.y * N + group_id.x * group_size.x];
+    const device float* bA = &A[group_id.y * group_size.y * N];
+    const device float* bB = &B[group_id.x * group_size.x];
+
+    float acc = 0.0;
+    for (uint64_t bk = 0; bk < N; bk += dK) {
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        As[lid.y * dK + lid.x] = bA[bk + lid.y * N + lid.x];
+        Bs[lid.y * dK + lid.x] = bB[bk * N + lid.y * N + lid.x];
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        for (uint64_t k = 0; k < dK; k++) {
+            acc += As[lid.y * dK + k] * Bs[k * dK + lid.x];
+        }
+    }
+    bC[lid.y * N + lid.x] = acc;
 }
 
 

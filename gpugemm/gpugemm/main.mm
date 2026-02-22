@@ -64,6 +64,8 @@ void encode(id<MTLCommandBuffer> cmd, MPSMatrix* A, MPSMatrix* B, MPSMatrix* C)
     [encoder setBuffer:B.data offset:0 atIndex:1];
     [encoder setBuffer:C.data offset:0 atIndex:2];
     [encoder setBytes:(void*)&N length:sizeof(N) atIndex:3];
+//    [encoder setThreadgroupMemoryLength:(32 * 32 * sizeof(float)) atIndex:0];
+//    [encoder setThreadgroupMemoryLength:(32 * 32 * sizeof(float)) atIndex:1];
     [encoder setComputePipelineState:kernel];
     [encoder dispatchThreadgroups:MTLSizeMake(A.columns / tgroupSize.width, A.rows / tgroupSize.height, 1) threadsPerThreadgroup:tgroupSize];
     // [encoder dispatchThreadgroups:MTLSizeMake(N / (8 * 4), N / (8 * 4 * 2), 1) threadsPerThreadgroup:MTLSizeMake(32, 2, 1)];
@@ -112,7 +114,8 @@ int main()
 
   auto kernel = [[MPSMatrixMultiplication alloc] initWithDevice:gpu::device transposeLeft:NO transposeRight:NO resultRows:N resultColumns:N interiorColumns:N alpha:1.0 beta:1.0];
 
-  for (int i = 0; i < 4; i++) {
+  for (int i = 0; i < 1; i++) {
+//    while (true) {
     memset(mpsBuffC.contents, 0, mpsBuffC.length);
     auto cmd = [gpu::queue commandBuffer];
     [kernel encodeToCommandBuffer:cmd leftMatrix:matA rightMatrix:matB resultMatrix:mpsMatC];
@@ -133,6 +136,19 @@ int main()
     [cmd waitUntilCompleted];
     auto cmdTime = [cmd GPUEndTime] - [cmd GPUStartTime];
     printf("SGEMM: %.3f TFLOP/s\n", (double)flops / cmdTime * 1e-12);
+
+    if (false) {
+      int blockX = 2;
+      int blockY = 2;
+      float* block = ((float*)buffC.contents) + blockY * 32 * N + blockX * 32;
+      for (int by = 0; by < 32; by++) {
+        for (int bx = 0; bx < 32; bx++) {
+          printf("%5.1f ", block[by * N + bx]);
+        }
+        printf("\n");
+      }
+      printf("\n");
+    }
 
     for (auto i = 0; i < vdspC->size(); i++) {
       auto x = ((float*)buffC.contents)[i];
