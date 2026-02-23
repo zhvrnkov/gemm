@@ -56,7 +56,7 @@ void encode(id<MTLCommandBuffer> cmd, MPSMatrix* A, MPSMatrix* B, MPSMatrix* C)
     uint64_t N = A.rows;
     MTLSize tgroupSize;
     tgroupSize.width = 8;
-    tgroupSize.height = 4;
+    tgroupSize.height = 8;
     tgroupSize.depth = 1;
     auto encoder = [cmd computeCommandEncoder];
 
@@ -67,7 +67,7 @@ void encode(id<MTLCommandBuffer> cmd, MPSMatrix* A, MPSMatrix* B, MPSMatrix* C)
 //    [encoder setThreadgroupMemoryLength:(32 * 32 * sizeof(float)) atIndex:0];
 //    [encoder setThreadgroupMemoryLength:(32 * 32 * sizeof(float)) atIndex:1];
     [encoder setComputePipelineState:kernel];
-    [encoder dispatchThreadgroups:MTLSizeMake(A.columns / 8, A.rows / 8, 1) threadsPerThreadgroup:tgroupSize];
+    [encoder dispatchThreadgroups:MTLSizeMake(A.columns / 16, A.rows / 16, 1) threadsPerThreadgroup:tgroupSize];
     // [encoder dispatchThreadgroups:MTLSizeMake(N / (8 * 4), N / (8 * 4 * 2), 1) threadsPerThreadgroup:MTLSizeMake(32, 2, 1)];
 
     [encoder endEncoding];

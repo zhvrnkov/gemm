@@ -14,7 +14,7 @@ kernel void sgemm(
                   uint2 group_size [[threads_per_threadgroup]]
                   )
 {
-    constexpr uint64_t dK = 8;
+    constexpr uint64_t dK = 16;
     threadgroup float As[dK * dK];
     threadgroup float Bs[dK * dK];
 
@@ -22,31 +22,66 @@ kernel void sgemm(
     const device float* bA = &A[group_id.y * dK * N];
     const device float* bB = &B[group_id.x * dK];
     
-    simdgroup_float8x8 Am;
-    simdgroup_float8x8 Bm;
-    simdgroup_float8x8 Rm = simdgroup_float8x8(0);
+    simdgroup_float8x8 Ams[2][2];
+    simdgroup_float8x8 Bms[2][2];
+    simdgroup_float8x8 Rms[2][2];
+    for (int i = 0; i < 4; i++) Rms[i / 2][i % 2] = simdgroup_float8x8(0);
 
     for (uint64_t bk = 0; bk < N; bk += dK) {
         threadgroup_barrier(mem_flags::mem_threadgroup);
-        uint yoffset = 0;
-        As[(lid.y + yoffset) * dK + lid.x] = bA[bk + (lid.y + yoffset) * N + lid.x];
-        Bs[(lid.y + yoffset) * dK + lid.x] = bB[bk * N + (lid.y + yoffset) * N + lid.x];
-        yoffset = 4;
-        As[(lid.y + yoffset) * dK + lid.x] = bA[bk + (lid.y + yoffset) * N + lid.x];
-        Bs[(lid.y + yoffset) * dK + lid.x] = bB[bk * N + (lid.y + yoffset) * N + lid.x];
+        uint2 offset = uint2(0, 0);
+        As[(lid.y + offset.y) * dK + (lid.x + offset.x)] = bA[bk + (lid.y + offset.y) * N + (lid.x + offset.x)];
+        Bs[(lid.y + offset.y) * dK + (lid.x + offset.x)] = bB[bk * N + (lid.y + offset.y) * N + (lid.x + offset.x)];
+        offset = uint2(8, 0);
+        As[(lid.y + offset.y) * dK + (lid.x + offset.x)] = bA[bk + (lid.y + offset.y) * N + (lid.x + offset.x)];
+        Bs[(lid.y + offset.y) * dK + (lid.x + offset.x)] = bB[bk * N + (lid.y + offset.y) * N + (lid.x + offset.x)];
+        offset = uint2(0, 8);
+        As[(lid.y + offset.y) * dK + (lid.x + offset.x)] = bA[bk + (lid.y + offset.y) * N + (lid.x + offset.x)];
+        Bs[(lid.y + offset.y) * dK + (lid.x + offset.x)] = bB[bk * N + (lid.y + offset.y) * N + (lid.x + offset.x)];
+        offset = uint2(8, 8);
+        As[(lid.y + offset.y) * dK + (lid.x + offset.x)] = bA[bk + (lid.y + offset.y) * N + (lid.x + offset.x)];
+        Bs[(lid.y + offset.y) * dK + (lid.x + offset.x)] = bB[bk * N + (lid.y + offset.y) * N + (lid.x + offset.x)];
         threadgroup_barrier(mem_flags::mem_threadgroup);
         
-        simdgroup_load(Am, As);
-        simdgroup_load(Bm, Bs);
-        simdgroup_multiply_accumulate(Rm, Am, Bm, Rm);
+        simdgroup_load(Ams[0][0], &As[0 * 8 * dK + 0 * 8], dK);
+        simdgroup_load(Bms[0][0], &Bs[0 * 8 * dK + 0 * 8], dK);
+        
+        simdgroup_load(Ams[0][1], &As[0 * 8 * dK + 1 * 8], dK);
+        simdgroup_load(Bms[0][1], &Bs[0 * 8 * dK + 1 * 8], dK);
+        
+        simdgroup_load(Ams[1][0], &As[1 * 8 * dK + 0 * 8], dK);
+        simdgroup_load(Bms[1][0], &Bs[1 * 8 * dK + 0 * 8], dK);
+        
+        simdgroup_load(Ams[1][1], &As[1 * 8 * dK + 1 * 8], dK);
+        simdgroup_load(Bms[1][1], &Bs[1 * 8 * dK + 1 * 8], dK);
+        
+        simdgroup_multiply_accumulate(Rms[0][0], Ams[0][0], Bms[0][0], Rms[0][0]);
+        simdgroup_multiply_accumulate(Rms[0][0], Ams[0][1], Bms[1][0], Rms[0][0]);
+        
+        simdgroup_multiply_accumulate(Rms[0][1], Ams[0][0], Bms[0][1], Rms[0][1]);
+        simdgroup_multiply_accumulate(Rms[0][1], Ams[0][1], Bms[1][1], Rms[0][1]);
+        
+        simdgroup_multiply_accumulate(Rms[1][0], Ams[1][0], Bms[0][0], Rms[1][0]);
+        simdgroup_multiply_accumulate(Rms[1][0], Ams[1][1], Bms[1][0], Rms[1][0]);
+        
+        simdgroup_multiply_accumulate(Rms[1][1], Ams[1][0], Bms[0][1], Rms[1][1]);
+        simdgroup_multiply_accumulate(Rms[1][1], Ams[1][1], Bms[1][1], Rms[1][1]);
     }
     
-    threadgroup float Rmfs[64];
-    simdgroup_store(Rm, Rmfs);
-    auto yoffset = 0;
-    bC[(lid.y + yoffset) * N + lid.x] = Rmfs[(lid.y + yoffset) * dK + lid.x];
-    yoffset = 4;
-    bC[(lid.y + yoffset) * N + lid.x] = Rmfs[(lid.y + yoffset) * dK + lid.x];
+    threadgroup float Rmfs[2][2][8 * 8];
+    simdgroup_store(Rms[0][0], Rmfs[0][0]);
+    simdgroup_store(Rms[0][1], Rmfs[0][1]);
+    simdgroup_store(Rms[1][0], Rmfs[1][0]);
+    simdgroup_store(Rms[1][1], Rmfs[1][1]);
+
+    uint2 offset = uint2(0);
+    bC[(lid.y + offset.y * 8) * N + (lid.x + offset.x * 8)] = Rmfs[offset.y][offset.x][lid.y * 8 + lid.x];
+    offset = uint2(1, 0);
+    bC[(lid.y + offset.y * 8) * N + (lid.x + offset.x * 8)] = Rmfs[offset.y][offset.x][lid.y * 8 + lid.x];
+    offset = uint2(0, 1);
+    bC[(lid.y + offset.y * 8) * N + (lid.x + offset.x * 8)] = Rmfs[offset.y][offset.x][lid.y * 8 + lid.x];
+    offset = uint2(1, 1);
+    bC[(lid.y + offset.y * 8) * N + (lid.x + offset.x * 8)] = Rmfs[offset.y][offset.x][lid.y * 8 + lid.x];
 }
 
 kernel void simd_test(
