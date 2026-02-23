@@ -18,9 +18,9 @@ kernel void sgemm(
     threadgroup float As[dK * dK];
     threadgroup float Bs[dK * dK];
 
-    device float* bC = &C[group_id.y * group_size.y * N + group_id.x * group_size.x];
-    const device float* bA = &A[group_id.y * group_size.y * N];
-    const device float* bB = &B[group_id.x * group_size.x];
+    device float* bC = &C[group_id.y * dK * N + group_id.x * dK];
+    const device float* bA = &A[group_id.y * dK * N];
+    const device float* bB = &B[group_id.x * dK];
     
     simdgroup_float8x8 Am;
     simdgroup_float8x8 Bm;
@@ -28,8 +28,12 @@ kernel void sgemm(
 
     for (uint64_t bk = 0; bk < N; bk += dK) {
         threadgroup_barrier(mem_flags::mem_threadgroup);
-        As[lid.y * dK + lid.x] = bA[bk + lid.y * N + lid.x];
-        Bs[lid.y * dK + lid.x] = bB[bk * N + lid.y * N + lid.x];
+        uint yoffset = 0;
+        As[(lid.y + yoffset) * dK + lid.x] = bA[bk + (lid.y + yoffset) * N + lid.x];
+        Bs[(lid.y + yoffset) * dK + lid.x] = bB[bk * N + (lid.y + yoffset) * N + lid.x];
+        yoffset = 4;
+        As[(lid.y + yoffset) * dK + lid.x] = bA[bk + (lid.y + yoffset) * N + lid.x];
+        Bs[(lid.y + yoffset) * dK + lid.x] = bB[bk * N + (lid.y + yoffset) * N + lid.x];
         threadgroup_barrier(mem_flags::mem_threadgroup);
         
         simdgroup_load(Am, As);
@@ -39,7 +43,10 @@ kernel void sgemm(
     
     threadgroup float Rmfs[64];
     simdgroup_store(Rm, Rmfs);
-    bC[lid.y * N + lid.x] = Rmfs[lid.y * dK + lid.x];
+    auto yoffset = 0;
+    bC[(lid.y + yoffset) * N + lid.x] = Rmfs[(lid.y + yoffset) * dK + lid.x];
+    yoffset = 4;
+    bC[(lid.y + yoffset) * N + lid.x] = Rmfs[(lid.y + yoffset) * dK + lid.x];
 }
 
 kernel void simd_test(
