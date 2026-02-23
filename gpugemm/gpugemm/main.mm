@@ -55,8 +55,8 @@ void encode(id<MTLCommandBuffer> cmd, MPSMatrix* A, MPSMatrix* B, MPSMatrix* C)
 
     uint64_t N = A.rows;
     MTLSize tgroupSize;
-    tgroupSize.width = 32;
-    tgroupSize.height = 32;
+    tgroupSize.width = 8;
+    tgroupSize.height = 8;
     tgroupSize.depth = 1;
     auto encoder = [cmd computeCommandEncoder];
 
@@ -158,5 +158,59 @@ int main()
       }
     }
   }
+    return 0;
+}
 
+int main_test()
+{
+    id<MTLComputePipelineState> kernel;
+    auto kernelFunc = [gpu::lib newFunctionWithName:@"simd_test"];
+    kernel = [gpu::device newComputePipelineStateWithFunction:kernelFunc error:nil];
+    if (!kernel) {
+        NSLog(@"got error during pipeline creation");
+        return -1;
+    }
+    
+    constexpr auto N = 64;
+    auto buffA = [gpu::device newBufferWithLength:N * sizeof(float) options:MTLResourceStorageModeShared];
+    auto buffB = [gpu::device newBufferWithLength:N * sizeof(float) options:MTLResourceStorageModeShared];
+    auto buffC = [gpu::device newBufferWithLength:N * sizeof(float) options:MTLResourceStorageModeShared];
+    auto vdspC = new float[N];
+    for (int i = 0; i < (buffA.length / sizeof(float)); i++) {
+        ((float*)buffA.contents)[i] = rand() % 128;
+        ((float*)buffB.contents)[i] = rand() % 128;
+        ((float*)buffC.contents)[i] = 0;
+    }
+    auto cmd = [gpu::queue commandBuffer];
+    
+    auto encoder = [cmd computeCommandEncoder];
+    [encoder setBuffer:buffA offset:0 atIndex:0];
+    [encoder setBuffer:buffB offset:0 atIndex:1];
+    [encoder setBuffer:buffC offset:0 atIndex:2];
+    [encoder setComputePipelineState:kernel];
+    [encoder dispatchThreadgroups:MTLSizeMake(1, 1, 1) threadsPerThreadgroup:MTLSizeMake(32, 1, 1)];
+    [encoder endEncoding];
+    
+    [cmd commit];
+    [cmd waitUntilCompleted];
+    
+    const auto sN = (int)std::sqrt(N);
+    vDSP_mmul((float*)buffA.contents, 1, (float*)buffB.contents, 1, vdspC, 1, sN, sN, sN);
+    
+    for (int y = 0; y < sN; y++) {
+        for (int x = 0; x < sN; x++) {
+            printf("%6.2f ", ((float*)buffC.contents)[y * sN + x]);
+        }
+        printf("\n");
+    }
+    printf("\n");
+    printf("\n");
+    for (int y = 0; y < sN; y++) {
+        for (int x = 0; x < sN; x++) {
+            printf("%6.2f ", vdspC[y * sN + x]);
+        }
+        printf("\n");
+    }
+    printf("\n");
+    return 0;
 }
