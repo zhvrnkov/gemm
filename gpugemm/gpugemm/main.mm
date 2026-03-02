@@ -15,27 +15,27 @@
 #include <random>
 
 namespace gpu {
-auto device = MTLCreateSystemDefaultDevice();
-auto queue = [device newCommandQueue];
-auto lib = [device newDefaultLibrary];
+  auto device = MTLCreateSystemDefaultDevice();
+  auto queue = [device newCommandQueue];
+  auto lib = [device newDefaultLibrary];
 
-namespace compute {
-void dispatch1d(id<MTLComputeCommandEncoder> encoder,
-                id<MTLComputePipelineState> kernel,
-                uint64_t size)
-{
-    uint64_t simdgroupSize = kernel.threadExecutionWidth;
-    uint64_t simdgroupsInSize = (size + simdgroupSize - 1) / simdgroupSize;
-    auto threadsPerThreadgroup = std::min(simdgroupSize * simdgroupsInSize, (uint64_t)encoder.device.maxThreadsPerThreadgroup.width);
-    [encoder setComputePipelineState:kernel];
-    [encoder dispatchThreads:MTLSizeMake(size, 1, 1) threadsPerThreadgroup:MTLSizeMake(threadsPerThreadgroup, 1, 1)];
-}
-}
+  namespace compute {
+    void dispatch1d(id<MTLComputeCommandEncoder> encoder,
+        id<MTLComputePipelineState> kernel,
+        uint64_t size)
+    {
+      uint64_t simdgroupSize = kernel.threadExecutionWidth;
+      uint64_t simdgroupsInSize = (size + simdgroupSize - 1) / simdgroupSize;
+      auto threadsPerThreadgroup = std::min(simdgroupSize * simdgroupsInSize, (uint64_t)encoder.device.maxThreadsPerThreadgroup.width);
+      [encoder setComputePipelineState:kernel];
+      [encoder dispatchThreads:MTLSizeMake(size, 1, 1) threadsPerThreadgroup:MTLSizeMake(threadsPerThreadgroup, 1, 1)];
+    }
+  }
 }
 
 namespace gpugemm {
-void encode(id<MTLCommandBuffer> cmd, MPSMatrix* A, MPSMatrix* B, MPSMatrix* C)
-{
+  void encode(id<MTLCommandBuffer> cmd, MPSMatrix* A, MPSMatrix* B, MPSMatrix* C)
+  {
     assert(A.rows == A.columns);
     assert(B.rows == B.columns);
     assert(C.rows == C.columns);
@@ -45,18 +45,19 @@ void encode(id<MTLCommandBuffer> cmd, MPSMatrix* A, MPSMatrix* B, MPSMatrix* C)
     static id<MTLComputePipelineState> kernel;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        auto kernelFunc = [gpu::lib newFunctionWithName:@"sgemm"];
+        auto kernelFunc = [gpu::lib newFunctionWithName:@"sgemm_32x32_unrolled"];
         kernel = [gpu::device newComputePipelineStateWithFunction:kernelFunc error:nil];
-    });
+        });
     if (!kernel) {
-        NSLog(@"got error during pipeline creation");
-        return;
+      NSLog(@"got error during pipeline creation");
+      return;
     }
 
+    constexpr auto dim = 4;
     uint64_t N = A.rows;
     MTLSize tgroupSize;
-    tgroupSize.width = 8;
-    tgroupSize.height = 8;
+    tgroupSize.width = 32;
+    tgroupSize.height = 2;
     tgroupSize.depth = 1;
     auto encoder = [cmd computeCommandEncoder];
 
@@ -64,14 +65,14 @@ void encode(id<MTLCommandBuffer> cmd, MPSMatrix* A, MPSMatrix* B, MPSMatrix* C)
     [encoder setBuffer:B.data offset:0 atIndex:1];
     [encoder setBuffer:C.data offset:0 atIndex:2];
     [encoder setBytes:(void*)&N length:sizeof(N) atIndex:3];
-//    [encoder setThreadgroupMemoryLength:(32 * 32 * sizeof(float)) atIndex:0];
-//    [encoder setThreadgroupMemoryLength:(32 * 32 * sizeof(float)) atIndex:1];
+    //    [encoder setThreadgroupMemoryLength:(32 * 32 * sizeof(float)) atIndex:0];
+    //    [encoder setThreadgroupMemoryLength:(32 * 32 * sizeof(float)) atIndex:1];
     [encoder setComputePipelineState:kernel];
-    [encoder dispatchThreadgroups:MTLSizeMake(A.columns / 16, A.rows / 16, 1) threadsPerThreadgroup:tgroupSize];
+    [encoder dispatchThreadgroups:MTLSizeMake(A.columns / (dim * 8), A.rows / (dim * 8 * 2), 1) threadsPerThreadgroup:tgroupSize];
     // [encoder dispatchThreadgroups:MTLSizeMake(N / (8 * 4), N / (8 * 4 * 2), 1) threadsPerThreadgroup:MTLSizeMake(32, 2, 1)];
 
     [encoder endEncoding];
-}
+  }
 }
 
 constexpr auto N = 4096;
@@ -114,8 +115,8 @@ int main()
 
   auto kernel = [[MPSMatrixMultiplication alloc] initWithDevice:gpu::device transposeLeft:NO transposeRight:NO resultRows:N resultColumns:N interiorColumns:N alpha:1.0 beta:1.0];
 
-  for (int i = 0; i < 1; i++) {
-//    while (true) {
+  for (int i = 0; i < 3; i++) {
+    //    while (true) {
     memset(mpsBuffC.contents, 0, mpsBuffC.length);
     auto cmd = [gpu::queue commandBuffer];
     [kernel encodeToCommandBuffer:cmd leftMatrix:matA rightMatrix:matB resultMatrix:mpsMatC];
@@ -128,7 +129,8 @@ int main()
       assert(vdspC->at(i) == ((float*)mpsBuffC.contents)[i]);
   }
 
-  for (int i = 0; i < 4; i++) {
+  // while (true) {
+  for (int i = 0; i < 3; i++) {
     memset(buffC.contents, 0, buffC.length);
     auto cmd = [gpu::queue commandBuffer];
     gpugemm::encode(cmd, matA, matB, matC);
@@ -138,8 +140,8 @@ int main()
     printf("SGEMM: %.3f TFLOP/s\n", (double)flops / cmdTime * 1e-12);
 
     if (false) {
-      int blockX = 2;
-      int blockY = 2;
+      int blockX = 0;
+      int blockY = 0;
       float* block = ((float*)buffC.contents) + blockY * 32 * N + blockX * 32;
       for (int by = 0; by < 32; by++) {
         for (int bx = 0; bx < 32; bx++) {
@@ -158,31 +160,31 @@ int main()
       }
     }
   }
-    return 0;
-}
+  return 0;
+  }
 
-int main_test()
-{
+  int main_test()
+  {
     id<MTLComputePipelineState> kernel;
     auto kernelFunc = [gpu::lib newFunctionWithName:@"simd_test"];
     kernel = [gpu::device newComputePipelineStateWithFunction:kernelFunc error:nil];
     if (!kernel) {
-        NSLog(@"got error during pipeline creation");
-        return -1;
+      NSLog(@"got error during pipeline creation");
+      return -1;
     }
-    
+
     constexpr auto N = 64;
     auto buffA = [gpu::device newBufferWithLength:N * sizeof(float) options:MTLResourceStorageModeShared];
     auto buffB = [gpu::device newBufferWithLength:N * sizeof(float) options:MTLResourceStorageModeShared];
     auto buffC = [gpu::device newBufferWithLength:N * sizeof(float) options:MTLResourceStorageModeShared];
     auto vdspC = new float[N];
     for (int i = 0; i < (buffA.length / sizeof(float)); i++) {
-        ((float*)buffA.contents)[i] = rand() % 128;
-        ((float*)buffB.contents)[i] = rand() % 128;
-        ((float*)buffC.contents)[i] = 0;
+      ((float*)buffA.contents)[i] = rand() % 128;
+      ((float*)buffB.contents)[i] = rand() % 128;
+      ((float*)buffC.contents)[i] = 0;
     }
     auto cmd = [gpu::queue commandBuffer];
-    
+
     auto encoder = [cmd computeCommandEncoder];
     [encoder setBuffer:buffA offset:0 atIndex:0];
     [encoder setBuffer:buffB offset:0 atIndex:1];
@@ -190,27 +192,27 @@ int main_test()
     [encoder setComputePipelineState:kernel];
     [encoder dispatchThreadgroups:MTLSizeMake(1, 1, 1) threadsPerThreadgroup:MTLSizeMake(32, 1, 1)];
     [encoder endEncoding];
-    
+
     [cmd commit];
     [cmd waitUntilCompleted];
-    
+
     const auto sN = (int)std::sqrt(N);
     vDSP_mmul((float*)buffA.contents, 1, (float*)buffB.contents, 1, vdspC, 1, sN, sN, sN);
-    
+
     for (int y = 0; y < sN; y++) {
-        for (int x = 0; x < sN; x++) {
-            printf("%6.2f ", ((float*)buffC.contents)[y * sN + x]);
-        }
-        printf("\n");
+      for (int x = 0; x < sN; x++) {
+        printf("%6.2f ", ((float*)buffC.contents)[y * sN + x]);
+      }
+      printf("\n");
     }
     printf("\n");
     printf("\n");
     for (int y = 0; y < sN; y++) {
-        for (int x = 0; x < sN; x++) {
-            printf("%6.2f ", vdspC[y * sN + x]);
-        }
-        printf("\n");
+      for (int x = 0; x < sN; x++) {
+        printf("%6.2f ", vdspC[y * sN + x]);
+      }
+      printf("\n");
     }
     printf("\n");
     return 0;
-}
+  }
