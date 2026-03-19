@@ -78,7 +78,7 @@ namespace gpugemv {
 void encode(id<MTLCommandBuffer> cmd, MPSMatrix* mat, MPSVector* vec, MPSVector* output)
 {
     assert(mat.columns == vec.length);
-    assert(vec.length == output.length);
+    assert(mat.rows == output.length);
     
     static id<MTLComputePipelineState> kernel;
     static dispatch_once_t onceToken;
@@ -113,13 +113,13 @@ void encode(id<MTLCommandBuffer> cmd, MPSMatrix* mat, MPSVector* vec, MPSVector*
 }
 
 constexpr auto N = 1024 * 8;
-constexpr auto M = 16384;
+constexpr auto M = 16384 / 1;
 
 int main_vec()
 {
     auto* mat = new std::array<float, N * M>{};
     auto* vec = new std::array<float, M>{};
-    auto* vdspVec = new std::array<float, M>{};
+    auto* vdspOutVec = new std::array<float, N>{};
     
     std::normal_distribution<float> dstr(0.0, 5.0);
     std::mt19937 gen{};
@@ -130,12 +130,12 @@ int main_vec()
             vec->at(i) = dstr(gen);
         }
     }
-    vDSP_mmul(mat->data(), 1, vec->data(), 1, vdspVec->data(), 1, N, 1, M);
+    vDSP_mmul(mat->data(), 1, vec->data(), 1, vdspOutVec->data(), 1, N, 1, M);
 
     auto buffMat = [gpu::device newBufferWithBytes:mat->data() length:mat->size() * sizeof(float) options:MTLResourceStorageModeShared];
     auto buffVec = [gpu::device newBufferWithBytes:vec->data() length:vec->size() * sizeof(float) options:MTLResourceStorageModeShared];
-    auto buffMpsOutVec = [gpu::device newBufferWithLength:vec->size() * sizeof(float) options:MTLResourceStorageModeShared];
-    auto buffOutVec = [gpu::device newBufferWithLength:vec->size() * sizeof(float) options:MTLResourceStorageModeShared];
+    auto buffMpsOutVec = [gpu::device newBufferWithLength:vdspOutVec->size() * sizeof(float) options:MTLResourceStorageModeShared];
+    auto buffOutVec = [gpu::device newBufferWithLength:vdspOutVec->size() * sizeof(float) options:MTLResourceStorageModeShared];
 
     uint64_t flops = 2ul * N * M;
     printf("GFLOP %.3f\n", (float)flops * 1e-9);
@@ -144,9 +144,10 @@ int main_vec()
     auto mpsMat = [[MPSMatrix alloc] initWithBuffer:buffMat descriptor:matDescriptor];
     
     auto vecDescriptor = [MPSVectorDescriptor vectorDescriptorWithLength:M dataType:MPSDataTypeFloat32];
+    auto outVecDescriptor = [MPSVectorDescriptor vectorDescriptorWithLength:N dataType:MPSDataTypeFloat32];
     auto mpsVec = [[MPSVector alloc] initWithBuffer:buffVec descriptor:vecDescriptor];
-    auto mpsOutVec = [[MPSVector alloc] initWithBuffer:buffMpsOutVec descriptor:vecDescriptor];
-    auto outVec = [[MPSVector alloc] initWithBuffer:buffOutVec descriptor:vecDescriptor];
+    auto mpsOutVec = [[MPSVector alloc] initWithBuffer:buffMpsOutVec descriptor:outVecDescriptor];
+    auto outVec = [[MPSVector alloc] initWithBuffer:buffOutVec descriptor:outVecDescriptor];
     
     auto kernel = [[MPSMatrixVectorMultiplication alloc] initWithDevice:gpu::device transpose:NO rows:N columns:M alpha:1.0 beta:1.0];
     
@@ -181,7 +182,7 @@ int main_vec()
     for (auto i = 0; i < N; i++) {
         auto sgemvX = ((float*)buffOutVec.contents)[i];
         auto mpsX = ((float*)buffMpsOutVec.contents)[i];
-        auto vdspX = vdspVec->at(i);
+        auto vdspX = vdspOutVec->at(i);
         if (fabsf(vdspX - mpsX) > epsilon) {
             printf("missmatch at %d (%f != %f)\n", i, vdspX, mpsX);
             assert(false);
