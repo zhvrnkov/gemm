@@ -268,3 +268,21 @@ kernel void sgemm_32x32_unrolled(
     simdgroup_store(acc[3][3], C + (3 * 8 * N) + (3 * 8), N);
 }
 
+kernel void sgemv(
+                  const device float* A,
+                  const device float* B,
+                  device float* C,
+                  constant const uint& H,
+                  constant const uint& W,
+//                  threadgroup float* shared,
+                  uint gid [[thread_position_in_grid]],
+                  uint lid [[thread_position_in_threadgroup]],
+                  uint group_id [[threadgroup_position_in_grid]],
+                  uint group_size [[threads_per_threadgroup]]
+                  )
+{
+    C[gid] = 0;
+    for (uint i = 0; i < W; i++) {
+        C[gid] += A[gid * W + i] * B[i];
+    }
+}
