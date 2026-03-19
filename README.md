@@ -35,3 +35,11 @@ SGEMV: AVG 188.408 GFLOP/s
 ```
 > to run this benchmark please change main to call main_vec
 
+# Conclussion
+This is a very fun experience to implement such foundational algorithm such as gemm with perfomance near to SOT implementations such as numpy and MPS
+
+gemv was especially fun because I think its really better then MPS but need to double check
+
+unrolling on gpu is insane, sgemm32x32_unrolled is basically manually unrolled version of sgemm32x32 which is x5 faster with no more modifications
+
+All code in this project is written manually, by hand, purely for recreational and educations purposes
