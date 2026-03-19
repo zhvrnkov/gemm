@@ -112,11 +112,12 @@ void encode(id<MTLCommandBuffer> cmd, MPSMatrix* mat, MPSVector* vec, MPSVector*
 }
 }
 
-constexpr auto N = 1024 * 8;
-constexpr auto M = 16384 / 1;
 
 int main_vec()
 {
+    constexpr auto N = 1024 * 8;
+    constexpr auto M = 16384 / 1;
+    
     auto* mat = new std::array<float, N * M>{};
     auto* vec = new std::array<float, M>{};
     auto* vdspOutVec = new std::array<float, N>{};
@@ -198,44 +199,48 @@ int main_vec()
 
 int main_mat()
 {
-    auto* A = new std::array<float, N * N>{};
-    auto* B = new std::array<float, N * N>{};
-    auto* C = new std::array<float, N * N>{};
-    auto* vdspC = new std::array<float, N * N>{};
+    constexpr auto M = 4096;
+    constexpr auto N = 4096;
+    constexpr auto P = 4096;
     
-    for (int i = 0; i < N * N; i++) {
-        A->at(i) = (float)(rand() % 100);
-        B->at(i) = (float)(rand() % 100);
-        C->at(i) = 0;
-        vdspC->at(i) = 0;
+    std::normal_distribution<float> dstr(0.0, 5.0);
+    std::mt19937 gen{};
+    
+    auto* A = new std::array<float, M * N>{};
+    auto* B = new std::array<float, N * P>{};
+    auto* C = new std::array<float, M * P>{};
+    auto* vdspC = new std::array<float, M * P>{};
+    
+    auto maxSize = std::max({A->size(), B->size(), C->size()});
+    for (int i = 0; i < maxSize; i++) {
+        if (i < A->size()) A->at(i) = dstr(gen);
+        if (i < B->size()) B->at(i) = dstr(gen);
+        if (i < C->size()) C->at(i) = dstr(gen);
+        if (i < vdspC->size()) vdspC->at(i) = dstr(gen);
     }
     
-    vDSP_mmul(A->data(), 1, B->data(), 1, vdspC->data(), 1, N, N, N);
+    vDSP_mmul(A->data(), 1, B->data(), 1, vdspC->data(), 1, M, P, N);
     
-    auto buffA = [gpu::device newBufferWithLength:N * N * sizeof(float) options:MTLResourceStorageModeShared];
-    auto buffB = [gpu::device newBufferWithLength:N * N * sizeof(float) options:MTLResourceStorageModeShared];
-    auto mpsBuffC = [gpu::device newBufferWithLength:N * N * sizeof(float) options:MTLResourceStorageModeShared];
-    auto buffC = [gpu::device newBufferWithLength:N * N * sizeof(float) options:MTLResourceStorageModeShared];
+    auto buffA = [gpu::device newBufferWithBytes:A->data() length:A->size() * sizeof(float) options:MTLResourceStorageModeShared];
+    auto buffB = [gpu::device newBufferWithBytes:B->data() length:B->size() * sizeof(float) options:MTLResourceStorageModeShared];
+    auto mpsBuffC = [gpu::device newBufferWithBytes:C->data() length:C->size() * sizeof(float) options:MTLResourceStorageModeShared];
+    auto buffC = [gpu::device newBufferWithBytes:C->data() length:C->size() * sizeof(float) options:MTLResourceStorageModeShared];
     
-    for (int i = 0; i < N * N; i++) {
-        ((float*)buffA.contents)[i] = A->at(i);
-        ((float*)buffB.contents)[i] = B->at(i);
-        ((float*)mpsBuffC.contents)[i] = C->at(i);
-    }
-    
-    uint64_t flops = 2ul * N * N * N;
+    uint64_t flops = 2ul * N * M * P;
     printf("TFLOP %.3f\n", (float)flops * 1e-12);
     
-    auto matDescriptor = [MPSMatrixDescriptor matrixDescriptorWithRows:N columns:N rowBytes:N * sizeof(float) dataType:MPSDataTypeFloat32];
-    auto matA = [[MPSMatrix alloc] initWithBuffer:buffA descriptor:matDescriptor];
-    auto matB = [[MPSMatrix alloc] initWithBuffer:buffB descriptor:matDescriptor];
-    auto mpsMatC = [[MPSMatrix alloc] initWithBuffer:mpsBuffC descriptor:matDescriptor];
-    auto matC = [[MPSMatrix alloc] initWithBuffer:buffC descriptor:matDescriptor];
+    auto matDescriptorA = [MPSMatrixDescriptor matrixDescriptorWithRows:M columns:N rowBytes:N * sizeof(float) dataType:MPSDataTypeFloat32];
+    auto matDescriptorB = [MPSMatrixDescriptor matrixDescriptorWithRows:N columns:P rowBytes:P * sizeof(float) dataType:MPSDataTypeFloat32];
+    auto matDescriptorC = [MPSMatrixDescriptor matrixDescriptorWithRows:M columns:P rowBytes:P * sizeof(float) dataType:MPSDataTypeFloat32];
+    auto matA = [[MPSMatrix alloc] initWithBuffer:buffA descriptor:matDescriptorA];
+    auto matB = [[MPSMatrix alloc] initWithBuffer:buffB descriptor:matDescriptorB];
+    auto mpsMatC = [[MPSMatrix alloc] initWithBuffer:mpsBuffC descriptor:matDescriptorC];
+    auto matC = [[MPSMatrix alloc] initWithBuffer:buffC descriptor:matDescriptorC];
     
-    auto kernel = [[MPSMatrixMultiplication alloc] initWithDevice:gpu::device transposeLeft:NO transposeRight:NO resultRows:N resultColumns:N interiorColumns:N alpha:1.0 beta:1.0];
+    auto kernel = [[MPSMatrixMultiplication alloc] initWithDevice:gpu::device transposeLeft:NO transposeRight:NO resultRows:M resultColumns:P interiorColumns:N alpha:1.0 beta:1.0];
     
-//    for (int i = 0; i < 3; i++) {
-    while (true) {
+    for (int i = 0; i < 3; i++) {
+//    while (true) {
         memset(mpsBuffC.contents, 0, mpsBuffC.length);
         auto cmd = [gpu::queue commandBuffer];
         [kernel encodeToCommandBuffer:cmd leftMatrix:matA rightMatrix:matB resultMatrix:mpsMatC];
@@ -338,5 +343,5 @@ int main_test()
 
 int main()
 {
-    return main_vec();
+    return main_mat();
 }
