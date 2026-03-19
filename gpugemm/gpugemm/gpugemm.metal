@@ -101,7 +101,9 @@ kernel void sgemm_32x32(
                         const device float* A,
                         const device float* B,
                         device float* C,
+                        constant const uint64_t& M,
                         constant const uint64_t& N,
+                        constant const uint64_t& P,
                         //                  threadgroup float* As,
                         //                  threadgroup float* Bs,
                         uint2 gid [[thread_position_in_grid]],
@@ -118,10 +120,10 @@ kernel void sgemm_32x32(
     // C += lid.y * 16 * N;
     A += group_id.y * (dK * 2) * N;
     B += group_id.x * dK;
-    C += group_id.y * (dK * 2) * N + group_id.x * dK;
+    C += group_id.y * (dK * 2) * P + group_id.x * dK;
 
     A += lid.y * dK * N;
-    C += lid.y * dK * N;
+    C += lid.y * dK * P;
     
     simdgroup_float8x8 Am[dim];
     simdgroup_float8x8 Bm[dim];
@@ -138,7 +140,7 @@ kernel void sgemm_32x32(
       }
 
       for (int y = 0; y < dim; y++) {
-        simdgroup_load(Bm[y], B + (k * N) + (y * 8), N);
+        simdgroup_load(Bm[y], B + (k * P) + (y * 8), P);
       }
 
       for (int y = 0; y < dim; y++) {
@@ -150,7 +152,7 @@ kernel void sgemm_32x32(
 
     for (int y = 0; y < dim; y++) {
         for (int x = 0; x < dim; x++) {
-            simdgroup_store(acc[y][x], C + (y * 8 * N) + (x * 8), N);
+            simdgroup_store(acc[y][x], C + (y * 8 * P) + (x * 8), P);
         }
     }
 }
@@ -160,7 +162,9 @@ kernel void sgemm_32x32_unrolled(
                         const device float* A,
                         const device float* B,
                         device float* C,
+                        constant const uint64_t& M,
                         constant const uint64_t& N,
+                        constant const uint64_t& P,
                         //                  threadgroup float* As,
                         //                  threadgroup float* Bs,
                         uint2 gid [[thread_position_in_grid]],
@@ -177,11 +181,11 @@ kernel void sgemm_32x32_unrolled(
     // C += lid.y * 16 * N;
     A += group_id.y * (dK * 2) * N;
     B += group_id.x * dK;
-    C += group_id.y * (dK * 2) * N + group_id.x * dK;
+    C += group_id.y * (dK * 2) * P + group_id.x * dK;
 
     A += lid.y * dK * N;
-    C += lid.y * dK * N;
-    
+    C += lid.y * dK * P;
+
     simdgroup_float8x8 Am[dim];
     simdgroup_float8x8 Bm[dim];
     simdgroup_float8x8 acc[dim][dim];
@@ -215,10 +219,10 @@ kernel void sgemm_32x32_unrolled(
         simdgroup_load(Am[3], A + (k) + (3 * 8 * N), N);
 
         // --- Unrolled loads from B into Bm[0..3] ---
-        simdgroup_load(Bm[0], B + (k * N) + (0 * 8), N);
-        simdgroup_load(Bm[1], B + (k * N) + (1 * 8), N);
-        simdgroup_load(Bm[2], B + (k * N) + (2 * 8), N);
-        simdgroup_load(Bm[3], B + (k * N) + (3 * 8), N);
+        simdgroup_load(Bm[0], B + (k * P) + (0 * 8), P);
+        simdgroup_load(Bm[1], B + (k * P) + (1 * 8), P);
+        simdgroup_load(Bm[2], B + (k * P) + (2 * 8), P);
+        simdgroup_load(Bm[3], B + (k * P) + (3 * 8), P);
 
         // --- Unrolled multiply-accumulate for all 4x4 combinations ---
         // y = 0
@@ -247,25 +251,25 @@ kernel void sgemm_32x32_unrolled(
     }
 
     // --- Unrolled stores from acc to C ---
-    simdgroup_store(acc[0][0], C + (0 * 8 * N) + (0 * 8), N);
-    simdgroup_store(acc[0][1], C + (0 * 8 * N) + (1 * 8), N);
-    simdgroup_store(acc[0][2], C + (0 * 8 * N) + (2 * 8), N);
-    simdgroup_store(acc[0][3], C + (0 * 8 * N) + (3 * 8), N);
+    simdgroup_store(acc[0][0], C + (0 * 8 * P) + (0 * 8), P);
+    simdgroup_store(acc[0][1], C + (0 * 8 * P) + (1 * 8), P);
+    simdgroup_store(acc[0][2], C + (0 * 8 * P) + (2 * 8), P);
+    simdgroup_store(acc[0][3], C + (0 * 8 * P) + (3 * 8), P);
 
-    simdgroup_store(acc[1][0], C + (1 * 8 * N) + (0 * 8), N);
-    simdgroup_store(acc[1][1], C + (1 * 8 * N) + (1 * 8), N);
-    simdgroup_store(acc[1][2], C + (1 * 8 * N) + (2 * 8), N);
-    simdgroup_store(acc[1][3], C + (1 * 8 * N) + (3 * 8), N);
+    simdgroup_store(acc[1][0], C + (1 * 8 * P) + (0 * 8), P);
+    simdgroup_store(acc[1][1], C + (1 * 8 * P) + (1 * 8), P);
+    simdgroup_store(acc[1][2], C + (1 * 8 * P) + (2 * 8), P);
+    simdgroup_store(acc[1][3], C + (1 * 8 * P) + (3 * 8), P);
 
-    simdgroup_store(acc[2][0], C + (2 * 8 * N) + (0 * 8), N);
-    simdgroup_store(acc[2][1], C + (2 * 8 * N) + (1 * 8), N);
-    simdgroup_store(acc[2][2], C + (2 * 8 * N) + (2 * 8), N);
-    simdgroup_store(acc[2][3], C + (2 * 8 * N) + (3 * 8), N);
+    simdgroup_store(acc[2][0], C + (2 * 8 * P) + (0 * 8), P);
+    simdgroup_store(acc[2][1], C + (2 * 8 * P) + (1 * 8), P);
+    simdgroup_store(acc[2][2], C + (2 * 8 * P) + (2 * 8), P);
+    simdgroup_store(acc[2][3], C + (2 * 8 * P) + (3 * 8), P);
 
-    simdgroup_store(acc[3][0], C + (3 * 8 * N) + (0 * 8), N);
-    simdgroup_store(acc[3][1], C + (3 * 8 * N) + (1 * 8), N);
-    simdgroup_store(acc[3][2], C + (3 * 8 * N) + (2 * 8), N);
-    simdgroup_store(acc[3][3], C + (3 * 8 * N) + (3 * 8), N);
+    simdgroup_store(acc[3][0], C + (3 * 8 * P) + (0 * 8), P);
+    simdgroup_store(acc[3][1], C + (3 * 8 * P) + (1 * 8), P);
+    simdgroup_store(acc[3][2], C + (3 * 8 * P) + (2 * 8), P);
+    simdgroup_store(acc[3][3], C + (3 * 8 * P) + (3 * 8), P);
 }
 
 kernel void sgemv(

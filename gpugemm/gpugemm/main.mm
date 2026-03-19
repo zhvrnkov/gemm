@@ -36,16 +36,14 @@ void dispatch1d(id<MTLComputeCommandEncoder> encoder,
 namespace gpugemm {
 void encode(id<MTLCommandBuffer> cmd, MPSMatrix* A, MPSMatrix* B, MPSMatrix* C)
 {
-    assert(A.rows == A.columns);
-    assert(B.rows == B.columns);
-    assert(C.rows == C.columns);
-    assert(A.rows == B.columns);
-    assert(B.rows == C.columns);
-    
+    assert(A.columns == B.rows);
+    assert(A.rows == C.rows);
+    assert(B.columns == C.columns);
+   
     static id<MTLComputePipelineState> kernel;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        auto kernelFunc = [gpu::lib newFunctionWithName:@"sgemm_32x32"];
+        auto kernelFunc = [gpu::lib newFunctionWithName:@"sgemm_32x32_unrolled"];
         kernel = [gpu::device newComputePipelineStateWithFunction:kernelFunc error:nil];
     });
     if (!kernel) {
@@ -54,7 +52,9 @@ void encode(id<MTLCommandBuffer> cmd, MPSMatrix* A, MPSMatrix* B, MPSMatrix* C)
     }
     
     constexpr auto dim = 4;
-    uint64_t N = A.rows;
+    uint64_t M = A.rows;
+    uint64_t N = A.columns;
+    uint64_t P = C.columns;
     MTLSize tgroupSize;
     tgroupSize.width = 32;
     tgroupSize.height = 2;
@@ -64,11 +64,13 @@ void encode(id<MTLCommandBuffer> cmd, MPSMatrix* A, MPSMatrix* B, MPSMatrix* C)
     [encoder setBuffer:A.data offset:0 atIndex:0];
     [encoder setBuffer:B.data offset:0 atIndex:1];
     [encoder setBuffer:C.data offset:0 atIndex:2];
-    [encoder setBytes:(void*)&N length:sizeof(N) atIndex:3];
+    [encoder setBytes:(void*)&M length:sizeof(M) atIndex:3];
+    [encoder setBytes:(void*)&N length:sizeof(N) atIndex:4];
+    [encoder setBytes:(void*)&P length:sizeof(P) atIndex:5];
     //    [encoder setThreadgroupMemoryLength:(32 * 32 * sizeof(float)) atIndex:0];
     //    [encoder setThreadgroupMemoryLength:(32 * 32 * sizeof(float)) atIndex:1];
     [encoder setComputePipelineState:kernel];
-    [encoder dispatchThreadgroups:MTLSizeMake(A.columns / (dim * 8), A.rows / (dim * 8 * 2), 1) threadsPerThreadgroup:tgroupSize];
+    [encoder dispatchThreadgroups:MTLSizeMake(P / (dim * 8), M / (dim * 8 * 2), 1) threadsPerThreadgroup:tgroupSize];
     // [encoder dispatchThreadgroups:MTLSizeMake(N / (8 * 4), N / (8 * 4 * 2), 1) threadsPerThreadgroup:MTLSizeMake(32, 2, 1)];
     
     [encoder endEncoding];
@@ -200,8 +202,8 @@ int main_vec()
 int main_mat()
 {
     constexpr auto M = 4096;
-    constexpr auto N = 4096;
-    constexpr auto P = 4096;
+    constexpr auto N = 256;
+    constexpr auto P = 1024;
     
     std::normal_distribution<float> dstr(0.0, 5.0);
     std::mt19937 gen{};
