@@ -32,19 +32,25 @@ import time
 # vec_length * space.height
 # how much flop in matrix matrix multiple? its m1.height * m0.height * m1.width = k * m * n
 
+M = 2048
 N = 2048
+P = 2048
 
-flops = N * N * 2 * N
+flops = 2 * M * N * P
 
-print(f"{flops / 1e9:.2f} GFLOP")
+print(f"GFLOP {flops / 1e9:.3f}")
 
-A = np.random.randn(N, N).astype(np.float32)
-B = np.random.randn(N, N).astype(np.float32)
+A = np.random.randn(M, N).astype(np.float32)
+B = np.random.randn(N, P).astype(np.float32)
 
-for i in range(100):
+ITERS = 10
+total_time = 0.0
+
+for i in range(ITERS):
     st = time.monotonic()
     C = A @ B
     et = time.monotonic()
     tt = et - st
-    
-    print(f"{flops / tt * 1e-9:.2f} GFLOP/s")
+    total_time += tt
+
+print(f"numpy AVG GFLOPS {flops / (total_time / ITERS) * 1e-9:.3f}")

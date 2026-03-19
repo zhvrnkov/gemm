@@ -202,8 +202,8 @@ int main_vec()
 int main_mat()
 {
     constexpr auto M = 4096;
-    constexpr auto N = 256;
-    constexpr auto P = 1024;
+    constexpr auto N = 4096;
+    constexpr auto P = 4096;
     
     std::normal_distribution<float> dstr(0.0, 5.0);
     std::mt19937 gen{};
@@ -241,7 +241,9 @@ int main_mat()
     
     auto kernel = [[MPSMatrixMultiplication alloc] initWithDevice:gpu::device transposeLeft:NO transposeRight:NO resultRows:M resultColumns:P interiorColumns:N alpha:1.0 beta:1.0];
     
-    for (int i = 0; i < 3; i++) {
+    constexpr auto ITERS = 8;
+    double mpsTotalTime = 0.0;
+    for (int i = 0; i < ITERS; i++) {
 //    while (true) {
         memset(mpsBuffC.contents, 0, mpsBuffC.length);
         auto cmd = [gpu::queue commandBuffer];
@@ -249,21 +251,23 @@ int main_mat()
         [cmd commit];
         [cmd waitUntilCompleted];
         auto cmdTime = [cmd GPUEndTime] - [cmd GPUStartTime];
-        printf("MPS:   %.3f TFLOP/s\n", (double)flops / cmdTime * 1e-12);
+        mpsTotalTime += cmdTime;
         
         for (auto i = 0; i < vdspC->size(); i++)
             assert(vdspC->at(i) == ((float*)mpsBuffC.contents)[i]);
     }
-    
+    printf("MPS: AVG %.3f TFLOP/s\n", (double)flops / (mpsTotalTime / (double)ITERS) * 1e-12);
+
     // while (true) {
-    for (int i = 0; i < 3; i++) {
+    double gemmTotalTime = 0.0;
+    for (int i = 0; i < ITERS; i++) {
         memset(buffC.contents, 0, buffC.length);
         auto cmd = [gpu::queue commandBuffer];
         gpugemm::encode(cmd, matA, matB, matC);
         [cmd commit];
         [cmd waitUntilCompleted];
         auto cmdTime = [cmd GPUEndTime] - [cmd GPUStartTime];
-        printf("SGEMM: %.3f TFLOP/s\n", (double)flops / cmdTime * 1e-12);
+        gemmTotalTime += cmdTime;
         
         if (false) {
             int blockX = 0;
@@ -286,6 +290,7 @@ int main_mat()
             }
         }
     }
+    printf("SGEMM: AVG %.3f TFLOP/s\n", (double)flops / (gemmTotalTime / (double)ITERS) * 1e-12);
     return 0;
 }
 
