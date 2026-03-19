@@ -91,6 +91,11 @@ void encode(id<MTLCommandBuffer> cmd, MPSMatrix* mat, MPSVector* vec, MPSVector*
         return;
     }
     
+    MTLSize tgroupSize;
+    tgroupSize.width = 32;
+    tgroupSize.height = 2;
+    tgroupSize.depth = 1;
+
     uint32_t H = (uint32_t)mat.rows;
     uint32_t W = (uint32_t)mat.columns;
     auto encoder = [cmd computeCommandEncoder];
@@ -99,20 +104,15 @@ void encode(id<MTLCommandBuffer> cmd, MPSMatrix* mat, MPSVector* vec, MPSVector*
     [encoder setBuffer:output.data offset:0 atIndex:2];
     [encoder setBytes:(void*)&H length:sizeof(H) atIndex:3];
     [encoder setBytes:(void*)&W length:sizeof(W) atIndex:4];
-//    [encoder setThreadgroupMemoryLength:vec.vectorBytes atIndex:0];
+//    [encoder setThreadgroupMemoryLength:tgroupSize.width * sizeof(float) atIndex:0];
     [encoder setComputePipelineState:kernel];
     
-    MTLSize tgroupSize;
-    tgroupSize.width = 32;
-    tgroupSize.height = 1;
-    tgroupSize.depth = 1;
-//    [encoder dispatchThreadgroups:MTLSizeMake(vec.length / tgroupSize.width, 1, 1) threadsPerThreadgroup:tgroupSize];
-    [encoder dispatchThreads:MTLSizeMake(vec.length, 1, 1) threadsPerThreadgroup:tgroupSize];
+    [encoder dispatchThreadgroups:MTLSizeMake(1, H / tgroupSize.height, 1) threadsPerThreadgroup:tgroupSize];
     [encoder endEncoding];
 }
 }
 
-constexpr auto N = 1024 * 4;
+constexpr auto N = 1024 * 8;
 constexpr auto M = 16384;
 
 int main_vec()
@@ -121,14 +121,16 @@ int main_vec()
     auto* vec = new std::array<float, M>{};
     auto* vdspVec = new std::array<float, M>{};
     
+    std::normal_distribution<float> dstr(0.0, 5.0);
+    std::mt19937 gen{};
+    
     for (int i = 0; i < N * M; i++) {
-        mat->at(i) = (float)(rand() % 32);
+        mat->at(i) = dstr(gen);
         if (i < vec->size()) {
-            vec->at(i) = (float)(rand() % 32);
+            vec->at(i) = dstr(gen);
         }
     }
     vDSP_mmul(mat->data(), 1, vec->data(), 1, vdspVec->data(), 1, N, 1, M);
-    
 
     auto buffMat = [gpu::device newBufferWithBytes:mat->data() length:mat->size() * sizeof(float) options:MTLResourceStorageModeShared];
     auto buffVec = [gpu::device newBufferWithBytes:vec->data() length:vec->size() * sizeof(float) options:MTLResourceStorageModeShared];
@@ -136,7 +138,7 @@ int main_vec()
     auto buffOutVec = [gpu::device newBufferWithLength:vec->size() * sizeof(float) options:MTLResourceStorageModeShared];
 
     uint64_t flops = 2ul * N * M;
-    printf("TFLOP %.3f\n", (float)flops * 1e-12);
+    printf("GFLOP %.3f\n", (float)flops * 1e-9);
     
     auto matDescriptor = [MPSMatrixDescriptor matrixDescriptorWithRows:N columns:M rowBytes:M * sizeof(float) dataType:MPSDataTypeFloat32];
     auto mpsMat = [[MPSMatrix alloc] initWithBuffer:buffMat descriptor:matDescriptor];
@@ -148,7 +150,9 @@ int main_vec()
     
     auto kernel = [[MPSMatrixVectorMultiplication alloc] initWithDevice:gpu::device transpose:NO rows:N columns:M alpha:1.0 beta:1.0];
     
-    for (int i = 0; i < 3; i++) {
+    constexpr auto ITERS = 16;
+    double mpsTotalTime = 0.0;
+    for (int i = 0; i < ITERS; i++) {
 //    while (true) {
         memset(buffMpsOutVec.contents, 0, buffMpsOutVec.length);
         auto cmd = [gpu::queue commandBuffer];
@@ -156,10 +160,11 @@ int main_vec()
         [cmd commit];
         [cmd waitUntilCompleted];
         auto cmdTime = [cmd GPUEndTime] - [cmd GPUStartTime];
-        printf("MPS:   %.3f TFLOP/s\n", (double)flops / cmdTime * 1e-12);
+        mpsTotalTime += cmdTime;
     }
     
-    for (int i = 0; i < 3; i++) {
+    double gemvTotalTime = 0.0;
+    for (int i = 0; i < ITERS; i++) {
 //    while (true) {
         memset(buffOutVec.contents, 0, buffOutVec.length);
         auto cmd = [gpu::queue commandBuffer];
@@ -167,19 +172,22 @@ int main_vec()
         [cmd commit];
         [cmd waitUntilCompleted];
         auto cmdTime = [cmd GPUEndTime] - [cmd GPUStartTime];
-        printf("SGEMV:   %.3f TFLOP/s\n", (double)flops / cmdTime * 1e-12);
+        gemvTotalTime += cmdTime;
     }
     
+    printf("MPS:   AVG %.3f GFLOP/s\n", (double)flops / (mpsTotalTime / (double)ITERS) * 1e-9);
+    printf("SGEMV: AVG %.3f GFLOP/s\n", (double)flops / (gemvTotalTime / (double)ITERS) * 1e-9);
+    float epsilon = 0.01;
     for (auto i = 0; i < N; i++) {
         auto sgemvX = ((float*)buffOutVec.contents)[i];
         auto mpsX = ((float*)buffMpsOutVec.contents)[i];
         auto vdspX = vdspVec->at(i);
-        if (vdspX != mpsX) {
+        if (fabsf(vdspX - mpsX) > epsilon) {
             printf("missmatch at %d (%f != %f)\n", i, vdspX, mpsX);
             assert(false);
         }
-        if (vdspX != sgemvX) {
-            printf("missmatch at %d (%f != %f)\n", i, vdspX, sgemvX);
+        if (fabsf(vdspX - sgemvX) > epsilon) {
+            printf("missmatch at %d (%f != %f) %f\n", i, vdspX, sgemvX, fabsf(vdspX - sgemvX));
             assert(false);
         }
     }
@@ -225,8 +233,8 @@ int main_mat()
     
     auto kernel = [[MPSMatrixMultiplication alloc] initWithDevice:gpu::device transposeLeft:NO transposeRight:NO resultRows:N resultColumns:N interiorColumns:N alpha:1.0 beta:1.0];
     
-    for (int i = 0; i < 3; i++) {
-        //    while (true) {
+//    for (int i = 0; i < 3; i++) {
+    while (true) {
         memset(mpsBuffC.contents, 0, mpsBuffC.length);
         auto cmd = [gpu::queue commandBuffer];
         [kernel encodeToCommandBuffer:cmd leftMatrix:matA rightMatrix:matB resultMatrix:mpsMatC];

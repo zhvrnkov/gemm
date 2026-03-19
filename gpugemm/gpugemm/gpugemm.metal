@@ -275,14 +275,28 @@ kernel void sgemv(
                   constant const uint& H,
                   constant const uint& W,
 //                  threadgroup float* shared,
-                  uint gid [[thread_position_in_grid]],
-                  uint lid [[thread_position_in_threadgroup]],
-                  uint group_id [[threadgroup_position_in_grid]],
-                  uint group_size [[threads_per_threadgroup]]
+                  uint2 gid [[thread_position_in_grid]],
+                  uint2 lid [[thread_position_in_threadgroup]],
+                  uint2 group_id [[threadgroup_position_in_grid]],
+                  uint2 group_size [[threads_per_threadgroup]]
                   )
 {
-    C[gid] = 0;
-    for (uint i = 0; i < W; i++) {
-        C[gid] += A[gid * W + i] * B[i];
+    threadgroup float shared[64];
+    threadgroup float acc[2][32];
+    C[gid.y] = 0;
+    acc[lid.y][lid.x] = 0;
+
+    for (uint i = 0; i < W; i += 64) {
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        shared[lid.y * 32 + lid.x] = B[i + lid.y * 32 + lid.x];
+        
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        acc[lid.y][lid.x] += shared[lid.x * 2 + 0] * A[gid.y * W + i + lid.x * 2 + 0] + shared[lid.x * 2 + 1] * A[gid.y * W + i + lid.x * 2 + 1];
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (lid.x == 0) {
+        for (uint i = 0; i < 32; i++) {
+            C[gid.y] += acc[lid.y][i];
+        }
     }
 }
