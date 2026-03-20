@@ -114,6 +114,80 @@ void encode(id<MTLCommandBuffer> cmd, MPSMatrix* mat, MPSVector* vec, MPSVector*
 }
 }
 
+namespace gpudot {
+void encode(id<MTLCommandBuffer> cmd, id<MTLBuffer> x, id<MTLBuffer> y, id<MTLBuffer> output)
+{
+    assert(x.length == y.length);
+    const uint64_t N = x.length / sizeof(float);
+    
+    static id<MTLComputePipelineState> kernel;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        auto kernelFunc = [gpu::lib newFunctionWithName:@"dotpr"];
+        kernel = [gpu::device newComputePipelineStateWithFunction:kernelFunc error:nil];
+    });
+    if (!kernel) {
+        NSLog(@"got error during pipeline creation");
+        return;
+    }
+    
+    auto encoder = [cmd computeCommandEncoder];
+    [encoder setBuffer:x offset:0 atIndex:0];
+    [encoder setBuffer:y offset:0 atIndex:1];
+    [encoder setBuffer:output offset:0 atIndex:2];
+    [encoder setBytes:(void*)&N length:sizeof(N) atIndex:3];
+    [encoder setComputePipelineState:kernel];
+    
+    [encoder dispatchThreadgroups:MTLSizeMake(1, 1, 1) threadsPerThreadgroup:MTLSizeMake(1024, 1, 1)];
+    [encoder endEncoding];
+}
+
+void encode2(id<MTLCommandBuffer> cmd, id<MTLBuffer> x, id<MTLBuffer> y, id<MTLBuffer> output)
+{
+    assert(x.length == y.length);
+    const uint64_t N = x.length / sizeof(float);
+    
+    static id<MTLComputePipelineState> kernel0;
+    static id<MTLComputePipelineState> kernel1;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        auto kernel0Func = [gpu::lib newFunctionWithName:@"dot_reduce0"];
+        auto kernel1Func = [gpu::lib newFunctionWithName:@"dot_reduce1"];
+        kernel0 = [gpu::device newComputePipelineStateWithFunction:kernel0Func error:nil];
+        kernel1 = [gpu::device newComputePipelineStateWithFunction:kernel1Func error:nil];
+    });
+    if (!kernel0 || !kernel1) {
+        NSLog(@"got error during pipeline creation");
+        return;
+    }
+    
+    auto threadsPerThreadgroup = MTLSizeMake(1024, 1, 1);
+    auto threadgroupMemFloats = 1024 * 2;
+    auto floatsPerThreadgroup = threadgroupMemFloats * 4;
+    auto threadgroupsWidth = N / floatsPerThreadgroup;
+    auto threadgroups = MTLSizeMake(threadgroupsWidth, 1, 1);
+    id<MTLBuffer> interm = [gpu::device newBufferWithLength:threadgroups.width * sizeof(float) options:MTLResourceStorageModePrivate];
+    
+    auto encoder = [cmd computeCommandEncoder];
+    [encoder setBuffer:x offset:0 atIndex:0];
+    [encoder setBuffer:y offset:0 atIndex:1];
+    [encoder setBuffer:interm offset:0 atIndex:2];
+    [encoder setBytes:(void*)&N length:sizeof(N) atIndex:3];
+    [encoder setThreadgroupMemoryLength:threadgroupMemFloats * sizeof(float) atIndex:0];
+    [encoder setComputePipelineState:kernel0];
+    [encoder dispatchThreadgroups:threadgroups threadsPerThreadgroup:threadsPerThreadgroup];
+    
+    [encoder setBuffer:interm offset:0 atIndex:0];
+    [encoder setBuffer:output offset:0 atIndex:1];
+    [encoder setBytes:(void*)&threadgroupsWidth length:sizeof(threadgroupsWidth) atIndex:2];
+    [encoder setThreadgroupMemoryLength:threadgroupsWidth * sizeof(float) atIndex:0];
+    [encoder setComputePipelineState:kernel1];
+    [encoder dispatchThreads:MTLSizeMake(threadgroupsWidth, 1, 1) threadsPerThreadgroup:MTLSizeMake(threadgroupsWidth, 1, 1)];
+    
+    [encoder endEncoding];
+}
+}
+
 
 int main_vec()
 {
@@ -348,7 +422,109 @@ int main_test()
     return 0;
 }
 
+int main_dot()
+{
+    constexpr auto N = 1 << 22;
+    
+    auto* x = new std::array<float, N>{};
+    auto* y = new std::array<float, N>{};
+    float vdspResult = 0.0;
+    
+    float naiveResult = 0.0;
+    float gpuResult = 0.0;
+    float mpsResult = 0.0;
+
+    std::normal_distribution<float> dstr(0.0, 5.0);
+    std::mt19937 gen{};
+    
+    for (int i = 0; i < N; i++) {
+        x->at(i) = dstr(gen);
+        y->at(i) = dstr(gen);
+    }
+
+    auto flops = N * 2ul;
+    double gbs = (double)N * sizeof(float) / 1000 / 1000 / 1000;
+    
+    printf("TOTAL MFLOP %.3f\n", flops / 1e6);
+    
+    constexpr auto ITERS = 100;
+    double vDSPTT = 0.0;
+    for (auto i = 0; i < ITERS; i++) {
+        vdspResult = 0;
+        clock_t st = clock();
+        vDSP_dotpr(x->data(), 1, y->data(), 1, &vdspResult, N);
+        clock_t et = clock();
+        vDSPTT += (double)(et - st) / CLOCKS_PER_SEC;
+    }
+    printf("vDSP AVG GFLOPS %.3f\n", (double)flops * 1e-9 / (vDSPTT / ITERS));
+
+    double naiveTT = 0.0;
+    for (auto i = 0; i < ITERS; i++) {
+        naiveResult = 0;
+        clock_t st = clock();
+        for (uint64_t i = 0; i < N; i++) naiveResult += x->at(i) * y->at(i);
+        clock_t et = clock();
+        naiveTT += (double)(et - st) / CLOCKS_PER_SEC;
+        
+    }
+    printf("naive AVG GFLOPS %.3f\n", (double)flops * 1e-9 / (naiveTT / ITERS));
+
+    double gpuTT = 0.0;
+    auto buffX = [gpu::device newBufferWithBytes:x->data() length:x->size() * sizeof(x->front()) options:MTLResourceStorageModeShared];
+    auto buffY = [gpu::device newBufferWithBytes:y->data() length:y->size() * sizeof(y->front()) options:MTLResourceStorageModeShared];
+    for (auto i = 0; i < ITERS; i++) {
+//    while (true) {
+        auto buffResult = [gpu::device newBufferWithLength:sizeof(float) options:MTLResourceStorageModeShared];
+        auto cmd = [gpu::queue commandBuffer];
+        
+        gpudot::encode2(cmd, buffX, buffY, buffResult);
+        
+        [cmd commit];
+        [cmd waitUntilCompleted];
+        
+        gpuTT += ([cmd GPUEndTime] - [cmd GPUStartTime]);
+        
+        gpuResult = *(float*)buffResult.contents;
+    }
+    printf("gpu AVG GFLOPS %.3f\n", (double)flops * 1e-9 / (gpuTT / ITERS));
+    printf("gpu AVG BANDWIDTH %.3f GB/s\n", gbs / (gpuTT / ITERS));
+    printf("gpu AVG time %f ms\n", (gpuTT / ITERS) * 1000);
+    
+    if (false) {
+        auto kernel = [[MPSMatrixMultiplication alloc] initWithDevice:gpu::device resultRows:1 resultColumns:1 interiorColumns:x->size()];
+
+        auto buffX = [gpu::device newBufferWithBytes:x->data() length:x->size() * sizeof(x->front()) options:MTLResourceStorageModeShared];
+        auto buffY = [gpu::device newBufferWithBytes:y->data() length:y->size() * sizeof(y->front()) options:MTLResourceStorageModeShared];
+        auto buffResult = [gpu::device newBufferWithLength:sizeof(float) options:MTLResourceStorageModeShared];
+        auto cmd = [gpu::queue commandBuffer];
+        
+        auto xDesc = [MPSMatrixDescriptor matrixDescriptorWithRows:1 columns:x->size() rowBytes:x->size() * sizeof(x->front()) dataType:MPSDataTypeFloat32];
+        auto yDesc = [MPSMatrixDescriptor matrixDescriptorWithRows:y->size() columns:1 rowBytes:sizeof(x->front()) dataType:MPSDataTypeFloat32];
+        auto rDesc = [MPSMatrixDescriptor matrixDescriptorWithRows:1 columns:1 rowBytes:sizeof(x->front()) dataType:MPSDataTypeFloat32];
+        auto xMat = [[MPSMatrix alloc] initWithBuffer:buffX descriptor:xDesc];
+        auto yMat = [[MPSMatrix alloc] initWithBuffer:buffY descriptor:yDesc];
+        auto rMat = [[MPSMatrix alloc] initWithBuffer:buffResult descriptor:rDesc];
+        [kernel encodeToCommandBuffer:cmd leftMatrix:xMat rightMatrix:yMat resultMatrix:rMat];
+        
+        [cmd commit];
+        [cmd waitUntilCompleted];
+        
+        printf("mps GFLOPS %.3f\n", (double)flops * 1e-9 / ([cmd GPUEndTime] - [cmd GPUStartTime]));
+        
+        mpsResult = *(float*)buffResult.contents;
+    }
+
+    
+    printf("\n%f %f %f %f\n", naiveResult, vdspResult, gpuResult, mpsResult);
+    assert(fabsf(naiveResult - vdspResult) < 2);
+    assert(fabsf(gpuResult - vdspResult) < 2);
+//    assert(fabsf(mpsResult - vdspResult) < 2);
+
+    return 0;
+}
+
 int main()
 {
-    return main_mat();
+    printf("%lu\n", [gpu::device maxThreadgroupMemoryLength]);
+    return main_dot();
 }

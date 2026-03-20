@@ -6,8 +6,8 @@ kernel void sgemm(
                   const device float* B,
                   device float* C,
                   constant const uint64_t& N,
-//                  threadgroup float* As,
-//                  threadgroup float* Bs,
+                  //                  threadgroup float* As,
+                  //                  threadgroup float* Bs,
                   uint2 gid [[thread_position_in_grid]],
                   uint2 lid [[thread_position_in_threadgroup]],
                   uint2 group_id [[threadgroup_position_in_grid]],
@@ -17,7 +17,7 @@ kernel void sgemm(
     constexpr uint64_t dK = 16;
     threadgroup float As[dK * dK];
     threadgroup float Bs[dK * dK];
-
+    
     device float* bC = &C[group_id.y * dK * N + group_id.x * dK];
     const device float* bA = &A[group_id.y * dK * N];
     const device float* bB = &B[group_id.x * dK];
@@ -26,7 +26,7 @@ kernel void sgemm(
     simdgroup_float8x8 Bms[2][2];
     simdgroup_float8x8 Rms[2][2];
     for (int i = 0; i < 4; i++) Rms[i / 2][i % 2] = simdgroup_float8x8(0);
-
+    
     for (uint64_t bk = 0; bk < N; bk += dK) {
         threadgroup_barrier(mem_flags::mem_threadgroup);
         uint2 offset = uint2(0, 0);
@@ -68,7 +68,7 @@ kernel void sgemm(
         simdgroup_multiply_accumulate(Rms[1][1], Ams[1][0], Bms[0][1], Rms[1][1]);
         simdgroup_multiply_accumulate(Rms[1][1], Ams[1][1], Bms[1][1], Rms[1][1]);
     }
-
+    
     simdgroup_store(Rms[0][0], &bC[0 * N + 0], N);
     simdgroup_store(Rms[0][1], &bC[0 * N + 8], N);
     simdgroup_store(Rms[1][0], &bC[8 * N + 0], N);
@@ -93,7 +93,7 @@ kernel void simd_test(
     simdgroup_load(Am, A);
     simdgroup_load(Bm, B);
     simdgroup_multiply(Cm, Am, Bm);
-
+    
     simdgroup_store(Cm, C);
 }
 
@@ -116,12 +116,12 @@ kernel void sgemm_32x32(
     constexpr auto dK = dim * 8;
     // threadgroup float As[dK * dK];
     // threadgroup float Bs[dK * dK];
-
+    
     // C += lid.y * 16 * N;
     A += group_id.y * (dK * 2) * N;
     B += group_id.x * dK;
     C += group_id.y * (dK * 2) * P + group_id.x * dK;
-
+    
     A += lid.y * dK * N;
     C += lid.y * dK * P;
     
@@ -133,23 +133,23 @@ kernel void sgemm_32x32(
             acc[y][x] = simdgroup_float8x8(0);
         }
     }
-
+    
     for (uint k = 0; k < N; k += 8) {
-      for (int x = 0; x < dim; x++) {
-        simdgroup_load(Am[x], A + (k) + (x * 8 * N), N);
-      }
-
-      for (int y = 0; y < dim; y++) {
-        simdgroup_load(Bm[y], B + (k * P) + (y * 8), P);
-      }
-
-      for (int y = 0; y < dim; y++) {
         for (int x = 0; x < dim; x++) {
-          simdgroup_multiply_accumulate(acc[y][x], Am[y], Bm[x], acc[y][x]);
+            simdgroup_load(Am[x], A + (k) + (x * 8 * N), N);
         }
-      }
+        
+        for (int y = 0; y < dim; y++) {
+            simdgroup_load(Bm[y], B + (k * P) + (y * 8), P);
+        }
+        
+        for (int y = 0; y < dim; y++) {
+            for (int x = 0; x < dim; x++) {
+                simdgroup_multiply_accumulate(acc[y][x], Am[y], Bm[x], acc[y][x]);
+            }
+        }
     }
-
+    
     for (int y = 0; y < dim; y++) {
         for (int x = 0; x < dim; x++) {
             simdgroup_store(acc[y][x], C + (y * 8 * P) + (x * 8), P);
@@ -159,113 +159,113 @@ kernel void sgemm_32x32(
 
 
 kernel void sgemm_32x32_unrolled(
-                        const device float* A,
-                        const device float* B,
-                        device float* C,
-                        constant const uint64_t& M,
-                        constant const uint64_t& N,
-                        constant const uint64_t& P,
-                        //                  threadgroup float* As,
-                        //                  threadgroup float* Bs,
-                        uint2 gid [[thread_position_in_grid]],
-                        uint2 lid [[thread_position_in_threadgroup]],
-                        uint2 group_id [[threadgroup_position_in_grid]],
-                        uint2 group_size [[threads_per_threadgroup]]
-                        )
+                                 const device float* A,
+                                 const device float* B,
+                                 device float* C,
+                                 constant const uint64_t& M,
+                                 constant const uint64_t& N,
+                                 constant const uint64_t& P,
+                                 //                  threadgroup float* As,
+                                 //                  threadgroup float* Bs,
+                                 uint2 gid [[thread_position_in_grid]],
+                                 uint2 lid [[thread_position_in_threadgroup]],
+                                 uint2 group_id [[threadgroup_position_in_grid]],
+                                 uint2 group_size [[threads_per_threadgroup]]
+                                 )
 {
     constexpr auto dim = 4;
     constexpr auto dK = dim * 8;
     // threadgroup float As[dK * dK];
     // threadgroup float Bs[dK * dK];
-
+    
     // C += lid.y * 16 * N;
     A += group_id.y * (dK * 2) * N;
     B += group_id.x * dK;
     C += group_id.y * (dK * 2) * P + group_id.x * dK;
-
+    
     A += lid.y * dK * N;
     C += lid.y * dK * P;
-
+    
     simdgroup_float8x8 Am[dim];
     simdgroup_float8x8 Bm[dim];
     simdgroup_float8x8 acc[dim][dim];
-
+    
     // --- Unrolled initialization of acc matrix ---
     acc[0][0] = simdgroup_float8x8(0);
     acc[0][1] = simdgroup_float8x8(0);
     acc[0][2] = simdgroup_float8x8(0);
     acc[0][3] = simdgroup_float8x8(0);
-
+    
     acc[1][0] = simdgroup_float8x8(0);
     acc[1][1] = simdgroup_float8x8(0);
     acc[1][2] = simdgroup_float8x8(0);
     acc[1][3] = simdgroup_float8x8(0);
-
+    
     acc[2][0] = simdgroup_float8x8(0);
     acc[2][1] = simdgroup_float8x8(0);
     acc[2][2] = simdgroup_float8x8(0);
     acc[2][3] = simdgroup_float8x8(0);
-
+    
     acc[3][0] = simdgroup_float8x8(0);
     acc[3][1] = simdgroup_float8x8(0);
     acc[3][2] = simdgroup_float8x8(0);
     acc[3][3] = simdgroup_float8x8(0);
-
+    
     for (uint k = 0; k < N; k += 8) {
         // --- Unrolled loads from A into Am[0..3] ---
         simdgroup_load(Am[0], A + (k) + (0 * 8 * N), N);
         simdgroup_load(Am[1], A + (k) + (1 * 8 * N), N);
         simdgroup_load(Am[2], A + (k) + (2 * 8 * N), N);
         simdgroup_load(Am[3], A + (k) + (3 * 8 * N), N);
-
+        
         // --- Unrolled loads from B into Bm[0..3] ---
         simdgroup_load(Bm[0], B + (k * P) + (0 * 8), P);
         simdgroup_load(Bm[1], B + (k * P) + (1 * 8), P);
         simdgroup_load(Bm[2], B + (k * P) + (2 * 8), P);
         simdgroup_load(Bm[3], B + (k * P) + (3 * 8), P);
-
+        
         // --- Unrolled multiply-accumulate for all 4x4 combinations ---
         // y = 0
         simdgroup_multiply_accumulate(acc[0][0], Am[0], Bm[0], acc[0][0]);
         simdgroup_multiply_accumulate(acc[0][1], Am[0], Bm[1], acc[0][1]);
         simdgroup_multiply_accumulate(acc[0][2], Am[0], Bm[2], acc[0][2]);
         simdgroup_multiply_accumulate(acc[0][3], Am[0], Bm[3], acc[0][3]);
-
+        
         // y = 1
         simdgroup_multiply_accumulate(acc[1][0], Am[1], Bm[0], acc[1][0]);
         simdgroup_multiply_accumulate(acc[1][1], Am[1], Bm[1], acc[1][1]);
         simdgroup_multiply_accumulate(acc[1][2], Am[1], Bm[2], acc[1][2]);
         simdgroup_multiply_accumulate(acc[1][3], Am[1], Bm[3], acc[1][3]);
-
+        
         // y = 2
         simdgroup_multiply_accumulate(acc[2][0], Am[2], Bm[0], acc[2][0]);
         simdgroup_multiply_accumulate(acc[2][1], Am[2], Bm[1], acc[2][1]);
         simdgroup_multiply_accumulate(acc[2][2], Am[2], Bm[2], acc[2][2]);
         simdgroup_multiply_accumulate(acc[2][3], Am[2], Bm[3], acc[2][3]);
-
+        
         // y = 3
         simdgroup_multiply_accumulate(acc[3][0], Am[3], Bm[0], acc[3][0]);
         simdgroup_multiply_accumulate(acc[3][1], Am[3], Bm[1], acc[3][1]);
         simdgroup_multiply_accumulate(acc[3][2], Am[3], Bm[2], acc[3][2]);
         simdgroup_multiply_accumulate(acc[3][3], Am[3], Bm[3], acc[3][3]);
     }
-
+    
     // --- Unrolled stores from acc to C ---
     simdgroup_store(acc[0][0], C + (0 * 8 * P) + (0 * 8), P);
     simdgroup_store(acc[0][1], C + (0 * 8 * P) + (1 * 8), P);
     simdgroup_store(acc[0][2], C + (0 * 8 * P) + (2 * 8), P);
     simdgroup_store(acc[0][3], C + (0 * 8 * P) + (3 * 8), P);
-
+    
     simdgroup_store(acc[1][0], C + (1 * 8 * P) + (0 * 8), P);
     simdgroup_store(acc[1][1], C + (1 * 8 * P) + (1 * 8), P);
     simdgroup_store(acc[1][2], C + (1 * 8 * P) + (2 * 8), P);
     simdgroup_store(acc[1][3], C + (1 * 8 * P) + (3 * 8), P);
-
+    
     simdgroup_store(acc[2][0], C + (2 * 8 * P) + (0 * 8), P);
     simdgroup_store(acc[2][1], C + (2 * 8 * P) + (1 * 8), P);
     simdgroup_store(acc[2][2], C + (2 * 8 * P) + (2 * 8), P);
     simdgroup_store(acc[2][3], C + (2 * 8 * P) + (3 * 8), P);
-
+    
     simdgroup_store(acc[3][0], C + (3 * 8 * P) + (0 * 8), P);
     simdgroup_store(acc[3][1], C + (3 * 8 * P) + (1 * 8), P);
     simdgroup_store(acc[3][2], C + (3 * 8 * P) + (2 * 8), P);
@@ -278,7 +278,7 @@ kernel void sgemv(
                   device float* C,
                   constant const uint& H,
                   constant const uint& W,
-//                  threadgroup float* shared,
+                  //                  threadgroup float* shared,
                   uint2 gid [[thread_position_in_grid]],
                   uint2 lid [[thread_position_in_threadgroup]],
                   uint2 group_id [[threadgroup_position_in_grid]],
@@ -289,7 +289,7 @@ kernel void sgemv(
     threadgroup float acc[2][32];
     C[gid.y] = 0;
     acc[lid.y][lid.x] = 0;
-
+    
     for (uint i = 0; i < W; i += 64) {
         threadgroup_barrier(mem_flags::mem_threadgroup);
         shared[lid.y * 32 + lid.x] = B[i + lid.y * 32 + lid.x];
@@ -303,4 +303,56 @@ kernel void sgemv(
             C[gid.y] += acc[lid.y][i];
         }
     }
+}
+
+kernel void dot_reduce0(
+                   const device float4* X,
+                   const device float4* Y,
+                   device float* output,
+                   constant const uint64_t& N,
+                   threadgroup float* shared,
+                   uint gid [[thread_position_in_grid]],
+                   uint lid [[thread_position_in_threadgroup]],
+                   uint group_id [[threadgroup_position_in_grid]],
+                   uint group_size [[threads_per_threadgroup]],
+                   uint groups [[threadgroups_per_grid]]
+                   )
+{
+    shared[lid] = dot(X[(group_id * group_size + lid)], Y[(group_id * group_size + lid)]);
+    X += groups * group_size;
+    Y += groups * group_size;
+    shared[group_size + lid] = dot(X[(group_id * group_size + lid)], Y[(group_id * group_size + lid)]);
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    for (uint offset = group_size; offset > 0; offset = offset >> 1) {
+        if (lid < offset) {
+            shared[lid] += shared[lid + offset];
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    
+    if (lid == 0) output[group_id] = shared[0];
+}
+
+kernel void dot_reduce1(
+                          const device float* X,
+                          device float* output,
+                          constant const uint& N,
+                          threadgroup float* shared,
+                          uint gid [[thread_position_in_grid]],
+                          uint lid [[thread_position_in_threadgroup]],
+                          uint group_size [[threads_per_threadgroup]]
+                          )
+{
+    shared[lid] = X[lid];
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    
+    for (uint offset = group_size / 2; offset > 0; offset >>= 1) {
+        if (lid < offset) {
+            shared[lid] += shared[lid + offset];
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    
+    output[0] = shared[0];
 }
